@@ -621,7 +621,7 @@ let _activeMeshStyle    = 'kenney'
 // Map meshStyle → { scene ref getter, material }
 // mat=null means "keep embedded GLB materials" (used for Trionda)
 const _OBJ_DEFS = [
-  { style:'obj_soccer',     getScene:()=>_soccerObjScene,     mat:_ballMatObjSoccer     },
+  { style:'obj_soccer',     getScene:()=>_soccerObjScene,     mat:null                  }, // Trionda GLB — keep embedded PBR
   { style:'obj_vintage',    getScene:()=>_vintageObjScene,    mat:_ballMatObjVintage    },
   { style:'obj_volleyball', getScene:()=>_volleyballObjScene, mat:_ballMatObjVolleyball },
   { style:'obj_basketball', getScene:()=>_basketballObjScene, mat:_ballMatObjBasketball },
@@ -764,7 +764,15 @@ function _lazyLoadBall(style) {
   if (!def) return
 
   loader.load(url, gltf => {
-    gltf.scene.scale.setScalar(BALL_RADIUS)
+    // mat=null인 경우(Trionda 등 PBR 내장 GLB) bounding box로 정확한 스케일 계산
+    if (def.mat === null) {
+      const box3  = new THREE.Box3().setFromObject(gltf.scene)
+      const size3 = box3.getSize(new THREE.Vector3())
+      const scale = (BALL_RADIUS * 2) / Math.max(size3.x, size3.y, size3.z)
+      gltf.scene.scale.setScalar(scale)
+    } else {
+      gltf.scene.scale.setScalar(BALL_RADIUS)
+    }
     gltf.scene.traverse(child => {
       if (!child.isMesh) return
       if (def.mat) child.material = def.mat
