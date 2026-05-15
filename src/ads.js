@@ -22,14 +22,18 @@ let _sdkLoaded   = false
 let _unsupported = false   // unsupported_env 수신 시 이후 호출도 mock으로
 let _busy        = false
 
+// Function 생성자 사용 — Vite 정적 import 분석 완전 우회
+// 로컬 dev에서 @verse8/ads 패키지 없어도 에러 없이 null 반환
+const _dynImport = new Function('p', 'return import(p)')
+
 async function _loadSDK() {
   if (_sdkLoaded) return _sdk
   _sdkLoaded = true
   try {
-    const m = await import(/* @vite-ignore */ '@verse8/ads')
+    const m = await _dynImport('@verse8/ads')
     _sdk = m.Verse8Ads ?? m.default ?? null
   } catch {
-    _sdk = null   // 로컬 dev — 패키지 없음
+    _sdk = null   // 로컬 dev — 패키지 없음 → mock fallback
   }
   return _sdk
 }
