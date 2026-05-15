@@ -522,6 +522,7 @@ export const BALLS = [
     gimmick:{ scoreMult:1.2, descKey:'gBallGold' } },
   // ── WC 2026 한정 공 ────────────────────────────────────────────────────────
   { id:'wc26',           nameKey:'bWC26',          emoji:'🌍', style:'soccer',
+    meshStyle:'obj_trionda',
     base:0x0d1b4e, patch:0xffc800, price:550, radiusMult:1.00,
     gimmick:{ scoreMult:1.15, descKey:'gBallWC26' } },
   // ── FIFA TRIONDA 2026 공인구 (GLB 실제 모델) ───────────────────────────────
