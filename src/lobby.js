@@ -1,7 +1,7 @@
 // ─── Lobby UI ─────────────────────────────────────────────────────────────────
 import { sfx } from './sfx.js'
 import { submitScore, fetchLeaderboard, fetchWCLeaderboard, flushPending } from './leaderboard.js'
-import { showRewarded, PLACEMENTS } from './ads.js'
+import { showRewarded, showInterstitial, PLACEMENTS, isBusy, isUnsupportedEnv } from './ads.js'
 
 const store = {
   get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d } catch { return d } },
@@ -1527,6 +1527,37 @@ function _closeAdOverlay() {
 }
 adSkipBtn.addEventListener('click', () => { if (!adSkipBtn.disabled) _closeAdOverlay() })
 
+// ─── Ad helpers ───────────────────────────────────────────────────────────────
+// 광고 관련 토스트 (dismissed / failed 피드백)
+function _adToast(msg) {
+  let el = document.getElementById('ad-toast')
+  if (!el) {
+    el = document.createElement('div')
+    el.id = 'ad-toast'
+    el.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.78);color:#fff;border-radius:20px;padding:8px 18px;font-size:13px;z-index:9999;pointer-events:none;transition:opacity .4s'
+    document.body.appendChild(el)
+  }
+  el.textContent = msg
+  el.style.opacity = '1'
+  clearTimeout(el._t)
+  el._t = setTimeout(() => { el.style.opacity = '0' }, 2500)
+}
+
+// unsupported_env 감지 → 광고 버튼 전체 숨김
+function _hideAdButtons() {
+  document.querySelectorAll('.ad-watch-btn, #revive-watch-btn, #coin-ad-watch-btn').forEach(el => {
+    el.style.display = 'none'
+  })
+}
+window.addEventListener('adUnsupported', _hideAdButtons)
+
+// 버튼 busy 상태 관리
+function _setAdBtnBusy(btn, busy) {
+  if (!btn) return
+  btn.disabled = busy
+  btn.style.opacity = busy ? '0.5' : ''
+}
+
 // ─── Revive prompt ────────────────────────────────────────────────────────────
 const revivePromptEl = document.getElementById('revive-prompt')
 
@@ -1540,9 +1571,15 @@ function _closeRevivePrompt(cb) {
 }
 
 document.getElementById('revive-watch-btn').addEventListener('click', () => {
+  if (isBusy()) return
+  const btn = document.getElementById('revive-watch-btn')
   _closeRevivePrompt(async () => {
-    const status = await showRewarded(PLACEMENTS.REVIVE, showMockAd)
-    if (status === 'rewarded') window.dispatchEvent(new CustomEvent('reviveGranted'))
+    _setAdBtnBusy(btn, true)
+    const status = await showRewarded(PLACEMENTS.REVIVE, showMockAd, { verify: true })
+    _setAdBtnBusy(btn, false)
+    if (status === 'rewarded')    window.dispatchEvent(new CustomEvent('reviveGranted'))
+    else if (status === 'dismissed') { _adToast('전체 광고를 시청해야 부활할 수 있어요'); window.dispatchEvent(new CustomEvent('reviveDeclined')) }
+    else if (status === 'failed')    { _adToast('광고를 불러올 수 없어요. 잠시 후 다시 시도하세요'); window.dispatchEvent(new CustomEvent('reviveDeclined')) }
     else window.dispatchEvent(new CustomEvent('reviveDeclined'))
   })
 })
@@ -1582,8 +1619,14 @@ function _finalizeCoinAd(tripled) {
 }
 
 document.getElementById('coin-ad-watch-btn').addEventListener('click', () => {
+  if (isBusy()) return
+  const btn = document.getElementById('coin-ad-watch-btn')
   _closeCoinAdPrompt(async () => {
-    const status = await showRewarded(PLACEMENTS.DOUBLE_COINS, showMockAd)
+    _setAdBtnBusy(btn, true)
+    const status = await showRewarded(PLACEMENTS.DOUBLE_COINS, showMockAd, { verify: true })
+    _setAdBtnBusy(btn, false)
+    if (status === 'dismissed') _adToast('전체 광고를 시청해야 코인을 받을 수 있어요')
+    if (status === 'failed')    _adToast('광고를 불러올 수 없어요. 잠시 후 다시 시도하세요')
     _finalizeCoinAd(status === 'rewarded')
   })
 })
@@ -1896,9 +1939,11 @@ function buyPlayer(id) {
 
 async function adUnlockPlayer(id) {
   const cfg = AD_UNLOCK[id]; if (!cfg || owned.includes(id)) return
-  // Placement ID: 'unlock-robben' | 'unlock-modric' — 서버 REWARD_TABLE과 일치
+  if (isBusy()) return
   const placementId = `unlock-${id}`
   const status = await showRewarded(placementId, showMockAd)
+  if (status === 'dismissed') { _adToast('전체 광고를 시청해야 해금할 수 있어요'); return }
+  if (status === 'failed')    { _adToast('광고를 불러올 수 없어요. 잠시 후 다시 시도하세요'); return }
   if (status !== 'rewarded') return
   if (owned.includes(id)) return   // double-fire guard
   const progressKey = `j3d_adprog_${id}`
@@ -2091,12 +2136,13 @@ document.querySelectorAll('.mode-sel-card:not(.locked)').forEach(card => {
 function launchGame() {
   sfx.btnTap()
   if (selectedMode === 'wc2026' && !wcCountry) {
-    // Must pick a country first
     openCountryPicker(() => launchGame())
     return
   }
   hintEl?.classList.add('hidden')
   hideLobby()
+  // 게임 시작 전 인터스티셜 (비차단 — 결과 무시)
+  showInterstitial(PLACEMENTS.GAME_START)
   // ── WC 모드: 트리온다 공 강제 적용 (소유 여부 무관) ──────────────────────
   if (selectedMode === 'wc2026') {
     const trionda = BALLS.find(b => b.id === 'trionda')
