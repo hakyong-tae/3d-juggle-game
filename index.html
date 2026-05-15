@@ -1,0 +1,1589 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>Juggle 3D</title>
+  <style>
+    *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+    body { background:#000; overflow:hidden; font-family:'Arial Black','Arial',sans-serif; touch-action:none; -webkit-font-smoothing:antialiased; }
+    #canvas-container { position:fixed; inset:0; }
+    canvas { display:block; }
+
+    /* ── Shared variables ── */
+    :root {
+      --accent: #3cf;
+      --accent2: #08f;
+      --gold: #ffc830;
+      --panel-bg: rgba(10,14,28,0.92);
+      --border: rgba(255,255,255,0.08);
+      --radius: 20px;
+    }
+
+    /* ── Transitions ── */
+    .screen { position:fixed; inset:0; z-index:50; display:flex; flex-direction:column; transition:opacity .3s, transform .3s; }
+    .screen.hidden { opacity:0; pointer-events:none; transform:translateY(12px); }
+    .screen.visible { opacity:1; pointer-events:all; transform:translateY(0); }
+
+    /* ════════════════════════════════
+       GAME OVER FLASH
+    ════════════════════════════════ */
+    #go-flash {
+      background: rgba(0,0,0,0.75);
+      align-items:center; justify-content:center; flex-direction:column;
+      gap:8px;
+    }
+    #go-flash .go-label { font-size:52px; font-weight:900; color:#fff; letter-spacing:-1px; }
+    #go-flash .go-val   { font-size:100px; font-weight:900; color:#fff; line-height:1; }
+    #go-flash .go-new   { font-size:14px; color:var(--gold); letter-spacing:3px; text-transform:uppercase; }
+
+    /* ════════════════════════════════
+       IN-GAME HUD
+    ════════════════════════════════ */
+    #hud {
+      position:fixed; top:0; left:0; right:0;
+      pointer-events:none; z-index:20; padding:14px 20px;
+      display:flex; align-items:center; justify-content:center;
+    }
+    #hud.hidden { display:none; }
+    #score-pill {
+      background:rgba(0,0,0,0.55); backdrop-filter:blur(8px);
+      border:1.5px solid var(--border); border-radius:40px;
+      padding:8px 28px; text-align:center;
+    }
+    #score-number { font-size:48px; font-weight:900; color:#fff; line-height:1; letter-spacing:-2px; }
+    #best-label   { font-size:11px; color:rgba(255,200,50,.9); letter-spacing:3px; text-transform:uppercase; margin-top:2px; }
+
+    /* off-screen indicator */
+    #ball-indicator {
+      position:fixed; z-index:30; pointer-events:none;
+      display:flex; flex-direction:column; align-items:center; gap:2px;
+      opacity:0; transition:opacity .2s;
+      transform:translateX(-50%);
+    }
+    #ball-indicator.visible { opacity:1; }
+    #indicator-arrow { font-size:26px; color:#fff; filter:drop-shadow(0 2px 8px rgba(0,0,0,.8)); animation:bob .6s ease-in-out infinite alternate; }
+    #indicator-dist  { font-size:13px; font-weight:900; color:#fff; background:rgba(0,0,0,.6); border-radius:12px; padding:2px 10px; }
+    @keyframes bob { from{transform:translateY(0)} to{transform:translateY(-6px)} }
+
+    /* ════════════════════════════════
+       LOBBY
+    ════════════════════════════════ */
+    #lobby {
+      background: transparent;
+      flex-direction:column; justify-content:flex-end;
+    }
+
+    /* Top score strip (shown after game over) */
+    #lobby-score-strip {
+      position:absolute; top:0; left:0; right:0;
+      display:flex; align-items:center; justify-content:center;
+      padding:56px 24px 0;
+      flex-direction:column; gap:4px;
+      pointer-events:none;
+    }
+    #lobby-last-score {
+      font-size:88px; font-weight:900; color:#fff; line-height:1;
+      text-shadow: 0 4px 32px rgba(0,0,0,.5);
+      transition: font-size .3s;
+    }
+    #lobby-last-label {
+      font-size:12px; letter-spacing:3px; color:rgba(255,255,255,.45); text-transform:uppercase;
+    }
+    #lobby-best-badge {
+      display:none; margin-top:6px;
+      background:var(--gold); color:#000; font-size:12px; font-weight:900;
+      padding:4px 16px; border-radius:20px; letter-spacing:2px;
+    }
+    #lobby-best-badge.show { display:inline-block; }
+
+    /* Bottom card */
+    #lobby-card {
+      background: var(--panel-bg);
+      border-radius: var(--radius) var(--radius) 0 0;
+      border-top: 1px solid var(--border);
+      backdrop-filter: blur(20px);
+      max-height: 72vh;
+      display: flex;
+      flex-direction: column;
+      transition: transform 0.38s cubic-bezier(0.32, 0.72, 0, 1);
+      will-change: transform;
+    }
+    /* Collapsed: only the handle + tab bar peeks out */
+    #lobby-card.collapsed {
+      transform: translateY(calc(100% - 78px));
+    }
+    /* Character preview mode: short panel so 3D view is mostly visible */
+    #lobby-card.chars-mode {
+      max-height: 42vh;
+    }
+    /* Pull handle */
+    #lobby-handle {
+      height: 20px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; flex-shrink: 0;
+    }
+    #lobby-handle::after {
+      content: '';
+      width: 36px; height: 4px;
+      background: rgba(255,255,255,0.18);
+      border-radius: 2px;
+      transition: background 0.2s;
+    }
+    #lobby-card.collapsed #lobby-handle::after {
+      background: rgba(255,255,255,0.32);  /* brighter when closed = invite tap */
+    }
+
+    /* Tab panels scroll internally */
+    .tab-panel {
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      padding-bottom: env(safe-area-inset-bottom, 16px);
+    }
+
+    /* Tabs */
+    #lobby-tabs {
+      display:flex; border-bottom:1px solid var(--border);
+    }
+    .tab-btn {
+      flex:1; padding:14px 0 10px; background:none; border:none; cursor:pointer;
+      display:flex; flex-direction:column; align-items:center; gap:3px;
+      color:rgba(255,255,255,.35); transition:color .2s;
+    }
+    .tab-btn.active { color: var(--accent); }
+    .tab-btn svg, .tab-btn .tab-icon { font-size:20px; line-height:1; }
+    .tab-btn span { font-size:9px; letter-spacing:1px; text-transform:uppercase; }
+
+    /* Tab panels */
+    .tab-panel { display:none; padding:16px 16px 24px; flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; }
+    .tab-panel.active { display:block; }
+
+    /* ── PLAY tab ── */
+    #play-tab.active {
+      display:flex; flex-direction:column; align-items:center; gap:16px;
+    }
+
+    .play-btn {
+      width:100%; padding:18px; border-radius:50px; border:none; cursor:pointer;
+      font-size:20px; font-weight:900; letter-spacing:2px; text-transform:uppercase;
+      background:linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
+      color:#001833; box-shadow:0 8px 32px rgba(0,136,255,.45);
+      transition:transform .1s, box-shadow .1s;
+    }
+    .play-btn:active { transform:scale(.97); }
+
+    .best-row {
+      display:flex; gap:24px;
+    }
+    .stat-box {
+      flex:1; background:rgba(255,255,255,.05); border:1px solid var(--border);
+      border-radius:14px; padding:12px 8px; text-align:center;
+    }
+    .stat-val { font-size:28px; font-weight:900; color:#fff; }
+    .stat-lbl { font-size:10px; color:rgba(255,255,255,.4); letter-spacing:2px; text-transform:uppercase; margin-top:2px; }
+
+    /* ── CHARACTERS tab ── */
+    .char-grid {
+      display:grid; grid-template-columns:repeat(3,1fr); gap:10px;
+    }
+    .char-card {
+      background:rgba(255,255,255,.05); border:1.5px solid var(--border);
+      border-radius:14px; aspect-ratio:1; display:flex; flex-direction:column;
+      align-items:center; justify-content:center; gap:6px; cursor:pointer;
+      transition:border-color .2s, background .2s; position:relative; overflow:hidden;
+    }
+    .char-card.selected { border-color:var(--accent); background:rgba(51,204,255,.08); }
+    .char-card.locked   { opacity:.5; cursor:default; }
+    .char-card .char-emoji { font-size:32px; }
+    .char-card .char-name  { font-size:10px; color:rgba(255,255,255,.7); letter-spacing:1px; font-weight:700; }
+    .char-card .lock-icon  { position:absolute; top:6px; right:8px; font-size:12px; color:rgba(255,255,255,.4); }
+    .char-card .unlock-req { font-size:9px; color:var(--gold); margin-top:-4px; }
+
+    .section-title { font-size:11px; color:rgba(255,255,255,.4); letter-spacing:2px; text-transform:uppercase; margin-bottom:12px; }
+
+    /* ── MODES tab ── */
+    .mode-list { display:flex; flex-direction:column; gap:10px; }
+    .mode-card {
+      background:rgba(255,255,255,.05); border:1.5px solid var(--border);
+      border-radius:14px; padding:14px 16px; display:flex; align-items:center;
+      gap:14px; cursor:pointer; transition:border-color .2s, background .2s;
+    }
+    .mode-card.selected { border-color:var(--accent); background:rgba(51,204,255,.08); }
+    .mode-card.locked   { opacity:.5; cursor:default; }
+    .mode-icon  { font-size:28px; min-width:36px; text-align:center; }
+    .mode-info  { flex:1; }
+    .mode-name  { font-size:15px; font-weight:900; color:#fff; }
+    .mode-desc  { font-size:11px; color:rgba(255,255,255,.45); margin-top:2px; }
+    .mode-badge { font-size:9px; padding:2px 8px; border-radius:10px; letter-spacing:1px; font-weight:700; }
+    .badge-soon { background:rgba(255,255,255,.1); color:rgba(255,255,255,.4); }
+    .badge-new  { background:var(--gold); color:#000; }
+
+    /* ── LEADERBOARD tab ── */
+    .lb-list { display:flex; flex-direction:column; gap:6px; }
+    .lb-row {
+      display:flex; align-items:center; gap:12px;
+      background:rgba(255,255,255,.04); border-radius:12px; padding:10px 14px;
+    }
+    .lb-row.me { background:rgba(51,204,255,.08); border:1px solid rgba(51,204,255,.2); }
+    .lb-rank  { font-size:14px; font-weight:900; color:rgba(255,255,255,.35); min-width:24px; }
+    .lb-rank.gold   { color:#ffc830; }
+    .lb-rank.silver { color:#c0c8d8; }
+    .lb-rank.bronze { color:#cd7f32; }
+    .lb-name  { flex:1; font-size:13px; color:#fff; font-weight:700; }
+    .lb-score { font-size:16px; font-weight:900; color:#fff; }
+    .lb-empty { text-align:center; color:rgba(255,255,255,.3); font-size:13px; padding:24px 0; }
+
+    /* ── Admin delete button ── */
+    .admin-del-btn {
+      background:rgba(255,60,60,.18); border:1px solid rgba(255,80,80,.35);
+      color:#ff6060; font-size:13px; border-radius:8px;
+      padding:2px 6px; cursor:pointer; flex-shrink:0; line-height:1.4;
+    }
+    .admin-del-btn:hover { background:rgba(255,60,60,.40); }
+    .side-rank-row .admin-del-btn { padding:1px 4px; font-size:11px; }
+
+    /* ── SETTINGS tab ── */
+    .settings-list { display:flex; flex-direction:column; gap:8px; }
+    .setting-row {
+      display:flex; align-items:center; gap:14px;
+      background:rgba(255,255,255,.05); border-radius:14px; padding:14px 16px;
+    }
+    .setting-icon { font-size:22px; min-width:30px; text-align:center; }
+    .setting-info { flex:1; }
+    .setting-name { font-size:14px; color:#fff; font-weight:700; }
+    .setting-sub  { font-size:11px; color:rgba(255,255,255,.4); margin-top:1px; }
+
+    /* Toggle switch */
+    .toggle {
+      width:44px; height:26px; background:rgba(255,255,255,.15); border-radius:13px;
+      position:relative; cursor:pointer; transition:background .2s; border:none;
+      flex-shrink:0;
+    }
+    .toggle.on { background:var(--accent); }
+    .toggle::after {
+      content:''; position:absolute; top:3px; left:3px;
+      width:20px; height:20px; background:#fff; border-radius:50%;
+      transition:transform .2s;
+    }
+    .toggle.on::after { transform:translateX(18px); }
+
+    /* ── WC 2026 banner ── */
+    #wc-banner {
+      position:absolute; top:14px; left:50%; transform:translateX(-50%);
+      background:linear-gradient(135deg, #0d1b4e 0%, #1a3a8f 50%, #b8860b 100%);
+      border:1px solid rgba(255,200,0,.35);
+      border-radius:20px; padding:7px 0 8px;
+      font-size:12px; font-weight:800; color:#fff;
+      letter-spacing:.3px; width: min(92vw, 400px);
+      box-shadow:0 2px 14px rgba(0,0,0,.5), 0 0 0 1px rgba(255,200,0,.15);
+      z-index:10; pointer-events:none; overflow:hidden;
+      animation: wc-pulse 3s ease-in-out infinite;
+    }
+    #wc-banner.wc-live {
+      background:linear-gradient(135deg, #6b0000 0%, #cc0000 50%, #8b0000 100%);
+      border-color:rgba(255,80,80,.4);
+      animation: wc-live-pulse 1.5s ease-in-out infinite;
+    }
+    #wc-banner-text {
+      display:block; text-align:center; padding:0 16px 5px; white-space:nowrap;
+    }
+    /* Ticker row */
+    .wc-ticker-wrap {
+      overflow:hidden; border-top:1px solid rgba(255,255,255,.1);
+      padding-top:5px; position:relative;
+    }
+    .wc-ticker-wrap::before, .wc-ticker-wrap::after {
+      content:''; position:absolute; top:0; bottom:0; width:24px; z-index:1;
+    }
+    .wc-ticker-wrap::before { left:0;  background:linear-gradient(to right,  #0f2070, transparent); }
+    .wc-ticker-wrap::after  { right:0; background:linear-gradient(to left,   #1a3a8f, transparent); }
+    .wc-ticker {
+      display:inline-block; white-space:nowrap; padding:0 16px;
+      animation: wc-ticker-scroll 18s linear infinite;
+    }
+    .wc-ticker.slow  { animation-duration: 28s; }
+    .wc-ticker.fast  { animation-duration: 12s; }
+    @keyframes wc-ticker-scroll {
+      0%   { transform: translateX(0); }
+      100% { transform: translateX(-50%); }
+    }
+    .wc-ticker-item { display:inline-block; margin-right:20px; font-size:11px; font-weight:700; }
+    .wc-ticker-item .ti-medal { color:var(--gold); margin-right:2px; }
+    @keyframes wc-pulse {
+      0%,100% { box-shadow:0 2px 14px rgba(0,0,0,.5), 0 0 0 1px rgba(255,200,0,.15); }
+      50%      { box-shadow:0 2px 20px rgba(0,0,0,.5), 0 0 8px rgba(255,200,0,.35); }
+    }
+    @keyframes wc-live-pulse {
+      0%,100% { box-shadow:0 2px 14px rgba(0,0,0,.5), 0 0 0 1px rgba(255,80,80,.3); }
+      50%      { box-shadow:0 2px 20px rgba(0,0,0,.5), 0 0 10px rgba(255,80,80,.5); }
+    }
+
+    /* Volume slider */
+    .vol-row {
+      display:flex; align-items:center; gap:10px;
+      background:rgba(255,255,255,.03); border-radius:10px;
+      padding:8px 16px 8px 60px; /* indent to align with setting-info */
+      margin-top:-6px;
+    }
+    .vol-label { font-size:11px; color:rgba(255,255,255,.4); min-width:28px; text-align:right; }
+    .vol-slider {
+      flex:1; -webkit-appearance:none; appearance:none;
+      height:4px; border-radius:2px; outline:none; cursor:pointer;
+      background: linear-gradient(to right, #3cf 70%, rgba(255,255,255,.15) 70%);
+    }
+    .vol-slider::-webkit-slider-thumb {
+      -webkit-appearance:none; appearance:none;
+      width:16px; height:16px; border-radius:50%;
+      background:#fff; cursor:pointer;
+      box-shadow:0 1px 4px rgba(0,0,0,.4);
+    }
+    .vol-slider::-moz-range-thumb {
+      width:16px; height:16px; border-radius:50%;
+      background:#fff; cursor:pointer; border:none;
+      box-shadow:0 1px 4px rgba(0,0,0,.4);
+    }
+
+    /* ── SHOP ── */
+    .shop-title-row {
+      display:flex; align-items:center; justify-content:space-between;
+      flex-shrink:0;
+    }
+    .coin-badge {
+      display:flex; align-items:center; gap:5px;
+      background:rgba(255,200,48,.12); border:1px solid rgba(255,200,48,.3);
+      border-radius:20px; padding:5px 12px;
+    }
+    .coin-icon { font-size:14px; }
+    #coin-display { font-size:14px; font-weight:900; color:var(--gold); }
+
+    /* ── SHOP TAB layout ── */
+    #shop-tab.active {
+      display:flex; flex-direction:column;
+      padding:10px 16px 0;
+      overflow:hidden;
+      gap:0;
+    }
+    /* Shop sub-tab bar */
+    .shop-sub-tabs {
+      display:flex; gap:6px;
+      padding:8px 0 6px; flex-shrink:0;
+    }
+    .shop-sub-btn {
+      flex:1; padding:8px 4px;
+      border-radius:10px; border:1.5px solid var(--border);
+      background:rgba(255,255,255,.04); color:rgba(255,255,255,.35);
+      font-size:11px; font-weight:900; letter-spacing:.3px;
+      cursor:pointer; transition:all .15s;
+    }
+    .shop-sub-btn.active {
+      border-color:var(--accent); background:rgba(51,204,255,.10);
+      color:var(--accent);
+    }
+    /* Sub panels */
+    .shop-sub-panel {
+      display:none; flex-direction:column;
+      overflow-y:auto; -webkit-overflow-scrolling:touch;
+      flex:1; padding-bottom:env(safe-area-inset-bottom,14px);
+    }
+    .shop-sub-panel.active { display:flex; }
+    /* ── PLAYER CARD CAROUSEL ── */
+    .player-carousel {
+      display:flex; flex-direction:row; gap:9px;
+      overflow-x:auto; overflow-y:hidden;
+      -webkit-overflow-scrolling:touch;
+      scroll-snap-type:x mandatory;
+      padding:6px 16px env(safe-area-inset-bottom, 14px);
+      /* negative margin to bleed to panel edges */
+      margin:0 -16px;
+      scrollbar-width:none;
+    }
+    .player-carousel::-webkit-scrollbar { display:none; }
+    /* Transparent spacers so first/last cards can snap to center */
+    .player-carousel::before,
+    .player-carousel::after {
+      content:''; flex-shrink:0; width:0px;
+    }
+
+    .player-card {
+      flex-shrink:0; width:72px;
+      display:flex; flex-direction:column; align-items:center; gap:5px;
+      background:rgba(255,255,255,.05); border:1.5px solid transparent;
+      border-radius:14px; padding:12px 6px 10px; cursor:pointer;
+      scroll-snap-align:start;
+      transition:border-color .18s, background .18s, transform .12s;
+    }
+    .player-card:active { transform:scale(.94); }
+    .player-card.selected {
+      border-color:rgba(255,200,50,.55); background:rgba(255,200,50,.07);
+    }
+    .player-card.equipped {
+      border-color:var(--accent); background:rgba(51,204,255,.09);
+    }
+    .pcard-flag  { font-size:26px; line-height:1; }
+    .pcard-name  { font-size:10px; font-weight:900; color:#fff; letter-spacing:.3px; text-align:center; }
+    .pcard-price { font-size:10px; font-weight:700; text-align:center; }
+    .pcard-price.p-owned      { color:var(--accent); }
+    .pcard-price.p-affordable { color:var(--gold); }
+    .pcard-price.p-locked     { color:rgba(255,255,255,.28); }
+    .pcard-gimmick {
+      display:block; font-size:9px; color:rgba(255,200,80,.8);
+      text-align:center; margin-top:2px; white-space:nowrap;
+    }
+    .stad-card { background:var(--stad-bg, rgba(255,255,255,.05)); }
+
+    /* ── Item action row (ball / stadium selected info) ── */
+    .item-action-row {
+      display:flex; align-items:center; justify-content:space-between;
+      gap:8px; padding:6px 0 4px; flex-shrink:0; min-height:32px;
+    }
+    .item-action-row:empty { display:none; }
+    .irow-label {
+      font-size:12px; font-weight:700; color:#fff; flex:1; min-width:0;
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    }
+    .irow-gimmick { font-size:11px; color:rgba(255,200,80,.8); flex-shrink:0; }
+    .irow-btn {
+      padding:5px 12px; border-radius:16px; border:none; cursor:pointer;
+      font-size:11px; font-weight:900; letter-spacing:.4px; flex-shrink:0;
+      transition:transform .1s;
+    }
+    .irow-btn:active { transform:scale(.93); }
+    .irow-btn.equipped  { background:var(--accent); color:#001833; }
+    .irow-btn.can-equip { background:rgba(255,255,255,.12); color:#fff; }
+    .irow-btn.can-buy   { background:linear-gradient(135deg,var(--gold),#e6a000); color:#000; }
+    .irow-btn.locked    { background:rgba(255,255,255,.05); color:rgba(255,255,255,.25); cursor:default; }
+
+    /* ── CHAR PREVIEW PANE ── */
+    #char-preview-pane {
+      display:flex; flex-direction:column; gap:10px;
+      background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.1);
+      border-radius:16px; padding:12px 14px;
+      margin:10px 0 10px; flex-shrink:0;
+    }
+    /* In shop-mode the 3D view IS the preview — hide 2D kit swatch, limit height */
+    #lobby-card.chars-mode .cpane-left { display:none; }
+    .cpane-top {
+      display:flex; align-items:center; gap:10px;
+    }
+    .cpane-bottom {
+      display:flex; align-items:center; justify-content:space-between; gap:8px;
+    }
+    .cpane-left {
+      display:flex; flex-direction:column; align-items:center; gap:5px; flex-shrink:0;
+    }
+    #cpane-flag { font-size:24px; line-height:1; }
+    .kit-large { display:flex; gap:3px; align-items:flex-end; }
+    .kit-large .kit-shirt { width:24px; height:28px; }
+    .kit-large .kit-shorts { width:18px; height:18px; }
+    .cpane-mid { flex:1; min-width:0; }
+    #cpane-name {
+      font-size:17px; font-weight:900; color:#fff; letter-spacing:.5px; line-height:1.1;
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    }
+    #cpane-full {
+      font-size:11px; color:rgba(255,255,255,.45); margin-top:2px;
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    }
+    #cpane-bdo {
+      font-size:12px; margin-top:4px; color:var(--gold);
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    }
+    #cpane-ability {
+      font-size:11px; color:var(--accent); font-weight:700; flex:1; min-width:0;
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    }
+
+    /* ── Kit color swatch ── */
+    .kit-shirt {
+      width:18px; height:20px; border-radius:3px 3px 2px 2px;
+      clip-path:polygon(20% 0%,80% 0%,100% 25%,100% 100%,0% 100%,0% 25%);
+    }
+    .kit-shorts { width:14px; height:14px; border-radius:2px; }
+
+    /* (player-row styles removed — replaced by player-card carousel) */
+
+    /* ── Equip buttons ── */
+    .btn-equip {
+      padding:7px 14px; border-radius:20px; border:none; cursor:pointer;
+      font-size:12px; font-weight:900; letter-spacing:.5px;
+      transition:transform .1s; white-space:nowrap;
+    }
+    .btn-equip:active { transform:scale(.95); }
+    .btn-equipped { background:var(--accent); color:#001833; }
+    .btn-own      { background:rgba(255,255,255,.1); color:rgba(255,255,255,.7); }
+    .btn-buy      { background:linear-gradient(135deg, var(--gold), #e6a000); color:#000; }
+    .btn-buy-locked { background:rgba(255,255,255,.05); color:rgba(255,255,255,.25); cursor:default; }
+
+    /* PLAY tab: coin strip */
+    #play-coin-row {
+      display:flex; align-items:center; justify-content:center; gap:6px;
+      color:rgba(255,200,48,.8); font-size:13px; font-weight:700;
+    }
+
+    /* ── Settings divider ── */
+    .settings-divider {
+      font-size:10px; letter-spacing:2px; color:rgba(255,255,255,.3);
+      text-transform:uppercase; padding:14px 4px 6px; font-weight:700;
+    }
+
+    /* ── BGM playlist card ── */
+    .bgm-playlist-card {
+      background:rgba(255,255,255,.04); border:1px solid var(--border);
+      border-radius:14px; padding:12px 14px; margin-top:4px;
+    }
+    .bgm-playlist-label {
+      font-size:10px; letter-spacing:2px; color:rgba(255,255,255,.3);
+      text-transform:uppercase; margin-bottom:10px; font-weight:700;
+    }
+
+    .bgm-track-row {
+      display:flex; align-items:center; gap:10px;
+      padding:9px 0; border-bottom:1px solid rgba(255,255,255,.06);
+    }
+    .bgm-track-row:last-child { border-bottom:none; }
+
+    .bgm-track-info { flex:1; min-width:0; }
+    .bgm-track-title {
+      font-size:13px; font-weight:700; color:#fff; white-space:nowrap;
+      overflow:hidden; text-overflow:ellipsis;
+    }
+    .bgm-track-playing {
+      font-size:10px; color:var(--accent); letter-spacing:1px; margin-top:2px;
+      display:none;
+    }
+    .bgm-track-playing.visible { display:block; }
+
+    .bgm-track-controls {
+      display:flex; align-items:center; gap:6px; flex-shrink:0;
+    }
+    .bgm-order-btn {
+      width:28px; height:28px; border-radius:8px; border:1px solid var(--border);
+      background:rgba(255,255,255,.07); color:rgba(255,255,255,.6);
+      font-size:13px; cursor:pointer; display:flex; align-items:center;
+      justify-content:center; transition:background .15s;
+    }
+    .bgm-order-btn:active { background:rgba(255,255,255,.15); }
+    .bgm-order-btn:disabled { opacity:.25; cursor:default; }
+
+    .bgm-toggle-btn {
+      width:32px; height:32px; border-radius:50%; border:2px solid var(--border);
+      background:rgba(255,255,255,.06); color:rgba(255,255,255,.35);
+      font-size:14px; cursor:pointer; display:flex; align-items:center;
+      justify-content:center; transition:all .15s;
+    }
+    .bgm-toggle-btn.active {
+      border-color:var(--accent); background:rgba(51,204,255,.15); color:var(--accent);
+    }
+
+    /* ── Play tab — mode select ── */
+    #play-tab.active { display:flex; flex-direction:column; gap:12px; }
+    .mode-select-list {
+      display:grid; grid-template-columns:1fr 1fr; gap:8px;
+    }
+    .mode-sel-card {
+      display:flex; flex-direction:column; align-items:center; text-align:center;
+      gap:5px; position:relative;
+      background:rgba(255,255,255,.05); border:1.5px solid var(--border);
+      border-radius:14px; padding:16px 10px 14px; cursor:pointer;
+      transition:border-color .2s, background .2s;
+    }
+    .mode-sel-card.selected { border-color:var(--accent); background:rgba(51,204,255,.08); }
+    .mode-sel-card.locked   { opacity:.45; pointer-events:none; }
+    .mode-sel-icon { font-size:26px; }
+    .mode-sel-info { width:100%; }
+    .mode-sel-name { font-size:13px; font-weight:900; color:#fff; }
+    .mode-sel-desc { font-size:10px; color:rgba(255,255,255,.45); margin-top:2px; line-height:1.3; }
+    .mode-sel-check {
+      position:absolute; top:7px; right:9px;
+      color:var(--accent); font-size:13px; font-weight:900;
+    }
+    .mode-sel-card:not(.selected) .mode-sel-check { visibility:hidden; }
+    .mode-sel-badge {
+      font-size:9px; padding:2px 8px; border-radius:10px; letter-spacing:1px; font-weight:700;
+      background:rgba(255,255,255,.08); color:rgba(255,255,255,.35); flex-shrink:0;
+    }
+    /* WC 2026 card special styling */
+    .mode-sel-wc {
+      border-color:rgba(255,200,0,.35);
+      background:linear-gradient(155deg, rgba(13,27,78,.45) 0%, rgba(184,134,11,.18) 100%);
+    }
+    .mode-sel-wc.selected {
+      border-color:var(--gold);
+      background:linear-gradient(155deg, rgba(13,27,78,.65) 0%, rgba(184,134,11,.35) 100%);
+    }
+    .wc-dots { display:flex; gap:3px; justify-content:center; margin-top:4px; }
+    .wc-dot  { width:6px; height:6px; border-radius:50%; background:rgba(255,255,255,.18); }
+    .wc-dot.done  { background:var(--gold); }
+    .wc-dot.current { background:#fff; }
+    .wc-champion-badge {
+      font-size:9px; font-weight:800; color:#000;
+      background:var(--gold); border-radius:8px; padding:2px 8px; margin-top:2px;
+    }
+    .play-bottom { display:flex; flex-direction:column; gap:10px; }
+
+    /* ── Tutorial ── */
+    #tutorial {
+      background:rgba(0,0,0,.80); align-items:center; justify-content:flex-end;
+      padding-bottom:env(safe-area-inset-bottom,20px);
+    }
+    .tut-card {
+      background:var(--panel-bg); border-top:1px solid var(--border);
+      border-radius:var(--radius) var(--radius) 0 0; backdrop-filter:blur(20px);
+      padding:28px 24px 24px; width:100%; display:flex; flex-direction:column; gap:20px;
+    }
+    .tut-steps { position:relative; min-height:140px; }
+    .tut-step  { display:none; flex-direction:column; align-items:center; gap:10px; text-align:center; }
+    .tut-step.active { display:flex; }
+    .tut-big   { font-size:56px; line-height:1; }
+    .tut-title { font-size:20px; font-weight:900; color:#fff; }
+    .tut-desc  { font-size:13px; color:rgba(255,255,255,.55); line-height:1.5; max-width:280px; }
+    .tut-dots  { display:flex; justify-content:center; gap:8px; }
+    .tut-dot   { width:7px; height:7px; border-radius:50%; background:rgba(255,255,255,.2); transition:background .2s; }
+    .tut-dot.active { background:var(--accent); }
+
+    /* ── In-game wind indicator ── */
+    #wind-indicator {
+      position:fixed; top:90px; left:50%; transform:translateX(-50%);
+      display:flex; align-items:center; gap:6px; z-index:25; pointer-events:none;
+      background:rgba(0,0,0,.5); border-radius:20px; padding:4px 12px 4px 8px;
+    }
+    #wind-arrow { font-size:18px; transition:transform .3s; }
+    .wind-bar-track {
+      width:48px; height:5px; background:rgba(255,255,255,.15); border-radius:3px; overflow:hidden;
+    }
+    .wind-bar-fill {
+      height:100%; background:linear-gradient(90deg,#88ddff,#0088ff);
+      border-radius:3px; transition:width .3s;
+    }
+
+    /* ── In-game announcement ── */
+    #game-announcement {
+      position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+      z-index:40; pointer-events:none;
+      background:rgba(0,0,0,.72); border:1px solid rgba(255,255,255,.12);
+      border-radius:20px; padding:12px 24px;
+      font-size:20px; font-weight:900; color:#fff; letter-spacing:.5px;
+      text-align:center; white-space:nowrap;
+      opacity:0; transition:opacity .3s;
+    }
+    #game-announcement.visible { opacity:1; }
+    #game-announcement.fade-out { opacity:0; }
+
+    /* ── Ready / Start countdown ── */
+    #countdown-overlay {
+      position:fixed; inset:0; z-index:55; pointer-events:none;
+      display:flex; align-items:center; justify-content:center;
+      opacity:1; transition:opacity .25s;
+    }
+    #countdown-overlay.hidden   { display:none; }
+    #countdown-overlay.fade-out { opacity:0; }
+    #countdown-text {
+      font-size:92px; font-weight:900; letter-spacing:-3px; text-align:center;
+      text-shadow: 0 0 60px rgba(0,0,0,.55), 0 4px 18px rgba(0,0,0,.85);
+      transition: transform .12s cubic-bezier(.22,1.8,.36,1), color .12s, opacity .2s;
+    }
+    #countdown-text.phase-ready {
+      color:#ffffff; opacity:1; transform:scale(1);
+    }
+    #countdown-text.phase-start {
+      color:#44ff88; opacity:1; transform:scale(1.18);
+    }
+    #countdown-text.phase-hidden {
+      opacity:0; transform:scale(0.85);
+    }
+
+    /* ── Mode timer (inside score pill) ── */
+    #mode-timer-row {
+      display:flex; align-items:center; gap:7px; margin-top:6px;
+    }
+    #mode-timer-track {
+      flex:1; height:4px; background:rgba(255,255,255,.18); border-radius:2px; overflow:hidden;
+    }
+    #mode-timer-fill {
+      height:100%; width:100%; border-radius:2px;
+      background:linear-gradient(90deg, var(--accent), var(--accent2));
+      transition:width .15s linear;
+    }
+    #mode-timer-num {
+      font-size:12px; font-weight:900; color:rgba(255,255,255,.7); min-width:26px; text-align:right;
+    }
+
+    /* ── Leaderboard mode tabs ── */
+    .lb-mode-tabs {
+      display:flex; gap:6px; margin-bottom:10px;
+    }
+    .lb-mode-btn {
+      flex:1; padding:7px 0; border-radius:10px; border:1.5px solid var(--border);
+      background:rgba(255,255,255,.04); color:rgba(255,255,255,.35);
+      font-size:9px; font-weight:900; letter-spacing:1px; text-transform:uppercase;
+      cursor:pointer; transition:all .15s;
+    }
+    .lb-mode-btn.active {
+      border-color:var(--accent); background:rgba(51,204,255,.10); color:var(--accent);
+    }
+
+    /* ── In-game hint ── */
+    #game-hint {
+      position:fixed; bottom:110px; left:50%; transform:translateX(-50%);
+      background:rgba(0,0,0,.78); border:1px solid rgba(255,255,255,.14);
+      border-radius:20px; padding:10px 14px 10px 12px;
+      display:flex; align-items:center; gap:10px; z-index:35;
+      max-width:300px; width:calc(100% - 40px); pointer-events:all;
+      animation: hintSlide .3s ease;
+    }
+    @keyframes hintSlide {
+      from { opacity:0; transform:translateX(-50%) translateY(10px) }
+      to   { opacity:1; transform:translateX(-50%) translateY(0) }
+    }
+    #hint-emoji { font-size:22px; flex-shrink:0; }
+    #hint-text  { font-size:13px; color:#fff; flex:1; line-height:1.4; }
+    #hint-ok {
+      background:var(--accent); color:#001833; border:none; border-radius:12px;
+      padding:5px 12px; font-size:11px; font-weight:900; cursor:pointer; flex-shrink:0;
+    }
+
+    /* ── Name modal ── */
+    #name-modal {
+      background:rgba(0,0,0,.6); backdrop-filter:blur(6px);
+      align-items:center; justify-content:center;
+    }
+    .name-modal-card {
+      background:var(--panel-bg); border:1px solid var(--border);
+      border-radius:24px; padding:28px 24px 24px;
+      width:calc(100% - 40px); max-width:340px;
+      display:flex; flex-direction:column; gap:12px; align-items:center; text-align:center;
+      transition: transform .15s ease-out;  /* keyboard slide */
+    }
+    .name-modal-heading { font-size:22px; font-weight:900; color:#fff; }
+    .name-modal-score   { font-size:52px; font-weight:900; color:var(--gold); line-height:1; }
+    .name-modal-sub     { font-size:13px; color:rgba(255,255,255,.5); }
+    .name-input {
+      width:100%; padding:13px 16px; background:rgba(255,255,255,.08);
+      border:1.5px solid var(--border); border-radius:14px;
+      color:#fff; font-size:16px; font-family:inherit; outline:none;
+      transition:border-color .2s; text-align:center;
+    }
+    .name-input:focus { border-color:var(--accent); }
+    .name-modal-btns { display:flex; gap:8px; width:100%; }
+    .name-btn-skip {
+      flex:1; padding:16px; border-radius:50px; border:1.5px solid var(--border);
+      background:rgba(255,255,255,.06); color:rgba(255,255,255,.45);
+      font-size:14px; font-weight:700; cursor:pointer;
+    }
+
+    /* ── LB char flag ── */
+    .lb-char-flag { font-size:18px; flex-shrink:0; width:24px; text-align:center; }
+
+    /* ── Lang toggle ── */
+    .lang-btn {
+      min-width:44px; height:32px; border-radius:10px;
+      border:1.5px solid var(--border); background:rgba(255,255,255,.08);
+      color:var(--accent); font-size:12px; font-weight:900; cursor:pointer;
+      letter-spacing:1px;
+    }
+    /* Language dropdown */
+    .lang-dropdown {
+      display:grid; grid-template-columns: repeat(3, 1fr);
+      gap:6px; padding:10px 4px 6px;
+      overflow:hidden;
+      max-height:0; opacity:0;
+      transition: max-height .32s ease, opacity .22s ease, padding .32s ease;
+    }
+    .lang-dropdown.open {
+      max-height:220px; opacity:1;
+    }
+    .lang-dropdown.hidden { display:none; }
+    .lang-opt {
+      display:flex; flex-direction:column; align-items:center; justify-content:center;
+      gap:2px; padding:8px 4px; border-radius:10px; cursor:pointer;
+      background:rgba(255,255,255,.05); border:1.5px solid transparent;
+      transition: background .15s, border-color .15s;
+    }
+    .lang-opt:active { background:rgba(255,255,255,.12); }
+    .lang-opt.selected {
+      background:rgba(51,204,255,.12); border-color:var(--accent);
+    }
+    .lang-opt-name  { font-size:13px; font-weight:700; color:#fff; }
+    .lang-opt-label { font-size:9px; color:rgba(255,255,255,.45); letter-spacing:.5px; }
+
+    /* ── Ad overlay (mock placeholder) ── */
+    #ad-overlay { background:rgba(0,0,0,.96); align-items:center; justify-content:center; z-index:100; }
+    .ad-mock-card { width:calc(100% - 48px); max-width:340px; display:flex; flex-direction:column; gap:16px; align-items:center; }
+    .ad-mock-header { width:100%; display:flex; align-items:center; justify-content:space-between; }
+    .ad-tag { background:rgba(255,255,255,.12); color:rgba(255,255,255,.45); font-size:10px; font-weight:900; letter-spacing:2px; padding:3px 10px; border-radius:6px; }
+    .ad-countdown-num { font-size:22px; font-weight:900; color:rgba(255,255,255,.45); min-width:28px; text-align:right; }
+    .ad-mock-body { width:100%; background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.07); border-radius:20px; padding:36px 24px; display:flex; flex-direction:column; align-items:center; gap:10px; text-align:center; }
+    .ad-mock-title { font-size:17px; font-weight:900; color:rgba(255,255,255,.55); }
+    .ad-mock-sub { font-size:12px; color:rgba(255,255,255,.28); line-height:1.6; }
+    .ad-skip-btn { width:100%; padding:16px; border-radius:50px; border:1.5px solid rgba(255,255,255,.18); background:rgba(255,255,255,.05); color:rgba(255,255,255,.35); font-size:14px; font-weight:700; transition:all .2s; }
+    .ad-skip-btn:not(:disabled) { border-color:var(--accent); color:var(--accent); background:rgba(51,204,255,.08); cursor:pointer; }
+    .ad-skip-btn:disabled { cursor:default; }
+
+    /* ── Revive prompt ── */
+    #revive-prompt { background:rgba(0,0,0,.72); backdrop-filter:blur(6px); align-items:center; justify-content:center; z-index:65; }
+    .revive-card { background:var(--panel-bg); border:1px solid var(--border); border-radius:24px; padding:28px 24px 20px; width:calc(100% - 48px); max-width:320px; display:flex; flex-direction:column; gap:10px; align-items:center; text-align:center; }
+    .revive-icon  { font-size:52px; line-height:1; }
+    .revive-title { font-size:22px; font-weight:900; color:#fff; }
+    .revive-sub   { font-size:13px; color:rgba(255,255,255,.5); line-height:1.5; }
+    .revive-skip-btn { width:100%; padding:13px; border-radius:50px; border:1.5px solid rgba(255,255,255,.12); background:transparent; color:rgba(255,255,255,.38); font-size:13px; font-weight:700; cursor:pointer; }
+    .revive-note  { font-size:10px; color:rgba(255,255,255,.22); letter-spacing:.5px; }
+
+    /* ── Coin multiplier prompt ── */
+    #coin-ad-prompt { background:rgba(0,0,0,.8); backdrop-filter:blur(6px); align-items:center; justify-content:center; }
+    .coin-ad-card { background:var(--panel-bg); border:1px solid var(--border); border-radius:24px; padding:28px 24px 20px; width:calc(100% - 48px); max-width:320px; display:flex; flex-direction:column; gap:10px; align-items:center; text-align:center; }
+    .coin-ad-score { font-size:68px; font-weight:900; color:#fff; line-height:1; }
+    .coin-ad-earned-line { font-size:15px; color:rgba(255,255,255,.5); }
+    .coin-ad-earned-line strong { color:var(--gold); font-size:17px; }
+    .coin-ad-sep { width:100%; height:1px; background:rgba(255,255,255,.08); margin:4px 0; }
+    .coin-ad-offer-lbl { font-size:11px; color:rgba(255,255,255,.35); letter-spacing:1.5px; text-transform:uppercase; }
+    .coin-ad-triple { font-size:44px; font-weight:900; color:var(--gold); line-height:1; }
+
+    /* ── Ad unlock button (in chars tab) ── */
+    .btn-ad-unlock { background:linear-gradient(135deg,#9933ff,#6611cc); color:#fff; font-size:11px; }
+
+    /* ── User ID modal ── */
+    #user-id-modal {
+      background:rgba(0,0,0,.78); backdrop-filter:blur(8px);
+      align-items:center; justify-content:center; z-index:205;
+    }
+    .uid-modal-card {
+      background:var(--panel-bg); border:1px solid var(--border);
+      border-radius:24px; padding:28px 24px 24px;
+      width:calc(100% - 40px); max-width:340px;
+      display:flex; flex-direction:column; gap:14px; align-items:center; text-align:center;
+      transition:transform .15s ease-out;
+    }
+    .uid-modal-icon  { font-size:48px; line-height:1; }
+    .uid-modal-title {
+      font-size:20px; font-weight:900; color:#fff; line-height:1.35;
+      word-break:keep-all; overflow-wrap:anywhere;
+    }
+    .uid-modal-sub   {
+      font-size:13px; color:rgba(255,255,255,.5); line-height:1.55;
+      word-break:keep-all; overflow-wrap:anywhere;
+    }
+    .uid-input {
+      width:100%; padding:13px 16px; background:rgba(255,255,255,.08);
+      border:1.5px solid var(--border); border-radius:14px;
+      color:#fff; font-size:22px; font-family:inherit; outline:none;
+      transition:border-color .2s; text-align:center; letter-spacing:3px; font-weight:900;
+    }
+    .uid-input:focus { border-color:var(--accent); }
+    .uid-hint { font-size:11px; color:rgba(255,255,255,.3); letter-spacing:.5px; }
+    .uid-err  { font-size:11px; color:#ff6b6b; min-height:14px; }
+
+    /* ── WC leaderboard row (player ID variant) ── */
+    .wc-lb-row {
+      display:flex; align-items:center; gap:10px;
+      background:rgba(255,255,255,.04); border-radius:12px; padding:10px 14px;
+    }
+    .wc-lb-row.me { background:rgba(51,204,255,.08); border:1px solid rgba(51,204,255,.2); }
+    .wc-lb-rank { font-size:18px; min-width:26px; text-align:center; flex-shrink:0; }
+    .wc-lb-flag { font-size:20px; flex-shrink:0; }
+    .wc-lb-info { flex:1; min-width:0; }
+    .wc-lb-uid  { font-size:13px; font-weight:800; color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .wc-lb-round{ font-size:10px; color:rgba(255,255,255,.4); margin-top:1px; }
+    .wc-lb-kicks{ font-size:14px; font-weight:900; color:#fff; flex-shrink:0; }
+
+    /* ── Tutorial modal ── */
+    #tutorial-modal {
+      background:rgba(0,0,0,.82); backdrop-filter:blur(8px);
+      align-items:center; justify-content:center; z-index:215;
+    }
+    .tut-modal-card {
+      background:var(--panel-bg); border:1px solid var(--border);
+      border-radius:28px; width:calc(100% - 40px); max-width:360px;
+      display:flex; flex-direction:column; overflow:hidden;
+      max-height:88vh;
+    }
+    .tut-slide-area {
+      padding:36px 28px 20px; flex:1;
+      display:flex; flex-direction:column;
+      align-items:center; text-align:center; gap:13px;
+      justify-content:center; min-height:260px;
+    }
+    .tut-slide-emoji { font-size:60px; line-height:1; }
+    .tut-slide-title {
+      font-size:21px; font-weight:900; color:#fff; line-height:1.35;
+      word-break:keep-all; overflow-wrap:anywhere;
+    }
+    .tut-slide-desc  {
+      font-size:13px; color:rgba(255,255,255,.58); line-height:1.65; max-width:290px;
+      word-break:keep-all; overflow-wrap:anywhere;
+    }
+    .tut-slide-extra {
+      background:rgba(255,255,255,.04); border:1px solid var(--border);
+      border-radius:14px; padding:12px 16px; width:100%;
+      font-size:12px; color:rgba(255,255,255,.5); line-height:1.9; text-align:left;
+    }
+    .tut-footer {
+      padding:14px 20px calc(14px + env(safe-area-inset-bottom, 0px));
+      border-top:1px solid var(--border);
+      display:flex; flex-direction:column; gap:10px;
+    }
+    .tut-dots-row {
+      display:flex; justify-content:center; gap:7px;
+    }
+    .tut-dot { width:6px; height:6px; border-radius:50%; background:rgba(255,255,255,.18); transition:all .25s; }
+    .tut-dot.active { background:var(--accent); width:18px; border-radius:3px; }
+    .tut-btn-row { display:flex; gap:8px; }
+    .tut-skip-btn {
+      flex:1; padding:14px; border-radius:50px;
+      border:1.5px solid var(--border);
+      background:rgba(255,255,255,.05); color:rgba(255,255,255,.38);
+      font-size:14px; font-weight:700; cursor:pointer;
+    }
+    .tut-next-btn {
+      flex:2; padding:14px; border-radius:50px; border:none; cursor:pointer;
+      font-size:16px; font-weight:900; letter-spacing:1px;
+      background:linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
+      color:#001833; box-shadow:0 6px 24px rgba(0,136,255,.35);
+      transition:transform .1s;
+    }
+    .tut-next-btn:active { transform:scale(.97); }
+
+    /* ── In-game side rank panels ── */
+    /* ── Side rank panels — portrait fallback only (hidden on wide screens) ── */
+    .side-rank-panel {
+      position:fixed; z-index:15; pointer-events:none;
+      width:118px;
+      background:rgba(8,8,14,0.82);
+      backdrop-filter:blur(8px);
+      padding:0;
+      opacity:0; transition:opacity .5s;
+      overflow:hidden;
+    }
+    .side-rank-panel.visible { opacity:1; }
+    /* Hide HTML panels on wide screens — CSS2D scoreboards handle those */
+    @media (min-aspect-ratio: 3/4) {
+      .side-rank-panel { display: none !important; }
+    }
+
+    /* Left panel — flush left, Classic */
+    #side-classic {
+      left:0; top:50%; transform:translateY(-50%);
+      border-radius:0 10px 10px 0;
+      border-top:1px solid rgba(255,200,40,.22);
+      border-right:1px solid rgba(255,200,40,.22);
+      border-bottom:1px solid rgba(255,200,40,.22);
+      box-shadow: 4px 0 18px rgba(0,0,0,.55), inset -1px 0 0 rgba(255,200,40,.08);
+    }
+
+    /* Right panels — flush right, TA & Challenge */
+    #side-ta {
+      right:0; top:80px;
+      border-radius:10px 0 0 10px;
+      border-top:1px solid rgba(80,200,255,.22);
+      border-left:1px solid rgba(80,200,255,.22);
+      border-bottom:1px solid rgba(80,200,255,.22);
+      box-shadow: -4px 0 18px rgba(0,0,0,.55), inset 1px 0 0 rgba(80,200,255,.08);
+    }
+    #side-ch {
+      right:0; bottom:110px;
+      border-radius:10px 0 0 10px;
+      border-top:1px solid rgba(80,255,160,.22);
+      border-left:1px solid rgba(80,255,160,.22);
+      border-bottom:1px solid rgba(80,255,160,.22);
+      box-shadow: -4px 0 18px rgba(0,0,0,.55), inset 1px 0 0 rgba(80,255,160,.08);
+    }
+
+    /* Title bar */
+    .side-panel-title {
+      font-size:8px; font-weight:900; letter-spacing:2px; text-transform:uppercase;
+      text-align:center; padding:5px 8px 4px;
+      border-bottom:1px solid rgba(255,255,255,.07);
+    }
+    #side-classic .side-panel-title { color:#ffc828; background:rgba(255,200,40,.06); }
+    #side-ta      .side-panel-title { color:#50c8ff; background:rgba(80,200,255,.06); }
+    #side-ch      .side-panel-title { color:#50ffa0; background:rgba(80,255,160,.06); }
+
+    /* Rows */
+    .side-rank-rows { padding:4px 6px 5px; display:flex; flex-direction:column; gap:1px; }
+    .side-rank-row {
+      display:flex; align-items:center; gap:4px;
+      padding:3px 2px; border-radius:4px;
+    }
+    .side-rank-row:nth-child(odd) { background:rgba(255,255,255,.03); }
+    .side-rank-medal { font-size:11px; min-width:16px; text-align:center; flex-shrink:0; line-height:1; }
+    .side-rank-name  {
+      font-size:11px; font-weight:700; color:rgba(255,255,255,.9);
+      flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    }
+    .side-rank-score {
+      font-size:11px; font-weight:900; color:#ffc828; flex-shrink:0;
+      font-variant-numeric: tabular-nums;
+    }
+    #side-ta      .side-rank-score { color:#50c8ff; }
+    #side-ch      .side-rank-score { color:#50ffa0; }
+    .side-rank-row.me .side-rank-name  { color:var(--accent); }
+    .side-rank-row.me .side-rank-score { color:var(--accent); }
+    /* Top-1 row slightly highlighted */
+    .side-rank-row:first-child { background:rgba(255,200,40,.06); }
+    #side-ta .side-rank-row:first-child  { background:rgba(80,200,255,.06); }
+    #side-ch .side-rank-row:first-child  { background:rgba(80,255,160,.06); }
+
+    /* ── Shared util ── */
+    .hidden { display:none !important; }
+
+    /* ══════════════════════════════════════════════════════════════════════
+       COUNTRY PICKER MODAL
+    ══════════════════════════════════════════════════════════════════════ */
+    #country-picker {
+      position: fixed; inset: 0; z-index: 200;
+      background: rgba(0,0,0,0.55); backdrop-filter: blur(4px);
+      display: flex; flex-direction: column; justify-content: flex-end;
+      opacity: 0; pointer-events: none;
+      transition: opacity .3s;
+    }
+    #country-picker.visible {
+      opacity: 1; pointer-events: all;
+    }
+    .cpicker-sheet {
+      background: var(--panel-bg);
+      border-radius: var(--radius) var(--radius) 0 0;
+      border-top: 1px solid var(--border);
+      backdrop-filter: blur(20px);
+      max-height: 75vh;
+      display: flex; flex-direction: column;
+      transform: translateY(100%);
+      transition: transform .3s cubic-bezier(0.32, 0.72, 0, 1);
+      padding-bottom: env(safe-area-inset-bottom, 16px);
+    }
+    #country-picker.visible .cpicker-sheet {
+      transform: translateY(0);
+    }
+    .cpicker-handle {
+      height: 20px; display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; cursor: pointer;
+    }
+    .cpicker-handle::after {
+      content: ''; width: 36px; height: 4px;
+      background: rgba(255,255,255,0.18); border-radius: 2px;
+    }
+    .cpicker-header {
+      display: flex; align-items: center;
+      padding: 0 16px 12px; flex-shrink: 0;
+    }
+    .cpicker-title {
+      flex: 1; font-size: 15px; font-weight: 900; color: #fff; text-align: center;
+    }
+    .cpicker-close-btn {
+      font-size: 16px; color: rgba(255,255,255,.5); background: none; border: none;
+      padding: 4px 6px; cursor: pointer; line-height: 1;
+    }
+    /* warning bar */
+    #cpicker-warning {
+      margin: 0 16px 10px; padding: 10px 14px;
+      background: rgba(255,150,0,.12); border: 1px solid rgba(255,150,0,.3);
+      border-radius: 10px; gap: 8px; align-items: center; flex-shrink: 0;
+      font-size: 12px; font-weight: 700; color: #ffaa44;
+    }
+    .cpicker-search-wrap {
+      padding: 0 16px 10px; flex-shrink: 0;
+    }
+    #country-search {
+      width: 100%; padding: 10px 14px;
+      background: rgba(255,255,255,0.08);
+      border: 1.5px solid var(--border); border-radius: 12px;
+      color: #fff; font-size: 15px; font-family: inherit; outline: none;
+      transition: border-color .2s;
+    }
+    #country-search:focus { border-color: var(--accent); }
+    #country-search::placeholder { color: rgba(255,255,255,0.3); }
+    #country-list {
+      flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch;
+      padding: 0 8px;
+    }
+    .cpicker-item {
+      display: flex; align-items: center; gap: 12px;
+      min-height: 48px; padding: 10px 10px;
+      border-radius: 10px; cursor: pointer;
+      transition: background .15s;
+    }
+    .cpicker-item:active { background: rgba(255,255,255,0.07); }
+    .cpicker-item.selected { background: rgba(51,204,255,0.08); }
+    .cpicker-flag { font-size: 22px; min-width: 28px; text-align: center; }
+    .cpicker-name { flex: 1; font-size: 14px; font-weight: 700; color: #fff; }
+    .cpicker-check { font-size: 14px; color: var(--accent); font-weight: 900; }
+
+    /* WC card country display */
+    #wc-card-country {
+      font-size: 11px; font-weight: 700; color: rgba(255,200,0,0.9);
+      margin-top: 2px; text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div id="canvas-container"></div>
+
+  <!-- In-game HUD -->
+  <div id="hud" class="hidden">
+    <div id="score-pill">
+      <div id="score-number">0</div>
+      <div id="best-label">BEST <span id="best-number">0</span></div>
+      <div id="mode-timer-row" class="hidden">
+        <div id="mode-timer-track"><div id="mode-timer-fill"></div></div>
+        <div id="mode-timer-num">30s</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Off-screen ball indicator -->
+  <div id="ball-indicator">
+    <div id="indicator-arrow">▲</div>
+    <div id="indicator-dist">0m</div>
+  </div>
+
+  <!-- Game Over flash (brief, then goes to lobby) -->
+  <div id="go-flash" class="screen hidden">
+    <div class="go-label" id="go-label-text">GAME OVER</div>
+    <div class="go-val" id="go-val">0</div>
+    <div class="go-new hidden" id="go-new">🏆 NEW BEST!</div>
+  </div>
+
+  <!-- Lobby -->
+  <div id="lobby" class="screen hidden">
+    <!-- WC 2026 countdown banner -->
+    <div id="wc-banner" class="hidden">
+      <span id="wc-banner-text"></span>
+      <div class="wc-ticker-wrap" id="wc-ticker-wrap" style="display:none">
+        <div class="wc-ticker" id="wc-ticker"></div>
+      </div>
+    </div>
+
+    <!-- score from last game (top, over 3D scene) -->
+    <div id="lobby-score-strip">
+      <div id="lobby-last-label">SCORE</div>
+      <div id="lobby-last-score">—</div>
+      <div id="lobby-best-badge">🏆 NEW BEST</div>
+    </div>
+
+    <!-- Bottom card -->
+    <div id="lobby-card">
+      <!-- Pull handle -->
+      <div id="lobby-handle"></div>
+      <!-- Tab nav -->
+      <div id="lobby-tabs">
+        <button class="tab-btn active" data-tab="play">
+          <span class="tab-icon">⚽</span>
+          <span>Play</span>
+        </button>
+        <button class="tab-btn" data-tab="shop">
+          <span class="tab-icon">🛍</span>
+          <span>Shop</span>
+        </button>
+        <button class="tab-btn" data-tab="lb">
+          <span class="tab-icon">🏆</span>
+          <span>Ranks</span>
+        </button>
+        <button class="tab-btn" data-tab="settings">
+          <span class="tab-icon">⚙️</span>
+          <span>Settings</span>
+        </button>
+      </div>
+
+      <!-- PLAY -->
+      <div id="play-tab" class="tab-panel active">
+        <div class="best-row">
+          <div class="stat-box">
+            <div class="stat-val" id="stat-best">0</div>
+            <div class="stat-lbl">Best</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-val" id="stat-last">—</div>
+            <div class="stat-lbl">Last</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-val" id="stat-games">0</div>
+            <div class="stat-lbl">Games</div>
+          </div>
+        </div>
+        <div class="mode-select-list">
+          <div class="mode-sel-card selected" data-mode="classic">
+            <span class="mode-sel-icon">⚽</span>
+            <div class="mode-sel-info">
+              <div class="mode-sel-name" id="mode-classic-name">Classic</div>
+              <div class="mode-sel-desc"  id="mode-classic-desc">Juggle as long as you can</div>
+            </div>
+            <span class="mode-sel-check">✓</span>
+          </div>
+          <div class="mode-sel-card" data-mode="timeattack">
+            <span class="mode-sel-icon">⏱️</span>
+            <div class="mode-sel-info">
+              <div class="mode-sel-name" id="mode-ta-name">Time Attack</div>
+              <div class="mode-sel-desc"  id="mode-ta-desc">Max kicks in 30 seconds</div>
+            </div>
+            <span class="mode-sel-check">✓</span>
+          </div>
+          <div class="mode-sel-card" data-mode="challenge">
+            <span class="mode-sel-icon">🎯</span>
+            <div class="mode-sel-info">
+              <div class="mode-sel-name" id="mode-ch-name">Challenge</div>
+              <div class="mode-sel-desc"  id="mode-ch-desc">Max height in 30 seconds</div>
+            </div>
+            <span class="mode-sel-check">✓</span>
+          </div>
+          <div class="mode-sel-card mode-sel-wc" data-mode="wc2026" id="mode-card-wc">
+            <span class="mode-sel-icon" id="wc-card-icon">🏆</span>
+            <div class="mode-sel-info">
+              <div class="mode-sel-name">WC 2026</div>
+              <div class="mode-sel-desc" id="wc-card-desc">Group Stage 1 · 12 kicks</div>
+            </div>
+            <div class="wc-dots" id="wc-card-dots"></div>
+            <div id="wc-card-country" style="display:none"></div>
+            <span class="mode-sel-check">✓</span>
+          </div>
+        </div>
+        <div class="play-bottom">
+          <div id="play-coin-row">
+            <span>🪙</span><span id="play-coin-display">0</span>
+            <span id="play-coin-label" style="color:rgba(255,255,255,.3);font-weight:400">coins</span>
+          </div>
+          <button class="play-btn" id="play-btn">PLAY</button>
+        </div>
+      </div>
+
+      <!-- SHOP -->
+      <div id="shop-tab" class="tab-panel">
+
+        <!-- Coin balance row -->
+        <div class="shop-title-row">
+          <span class="section-title" style="margin-bottom:0">SHOP</span>
+          <div class="coin-badge" id="coin-badge">
+            <span>🪙</span><span id="coin-display">0</span>
+          </div>
+        </div>
+
+        <!-- Sub-tab buttons -->
+        <div class="shop-sub-tabs">
+          <button class="shop-sub-btn active" data-shop-tab="players">👤 PLAYERS</button>
+          <button class="shop-sub-btn" data-shop-tab="balls">⚽ BALLS</button>
+          <button class="shop-sub-btn" data-shop-tab="stadiums">🏟 STADIUMS</button>
+        </div>
+
+        <!-- ── PLAYERS sub-panel ── -->
+        <div class="shop-sub-panel active" id="shop-players-panel">
+          <!-- Selected player preview pane -->
+          <div id="char-preview-pane">
+            <div class="cpane-top">
+              <div class="cpane-left">
+                <div id="cpane-flag"></div>
+                <div class="kit-large" id="cpane-kit"></div>
+              </div>
+              <div class="cpane-mid">
+                <div id="cpane-name">HM SON</div>
+                <div id="cpane-full"></div>
+                <div id="cpane-bdo"></div>
+              </div>
+            </div>
+            <div class="cpane-bottom">
+              <div id="cpane-ability"></div>
+              <div id="cpane-action"></div>
+            </div>
+          </div>
+          <!-- Player carousel -->
+          <div class="player-carousel" id="player-list"></div>
+        </div>
+
+        <!-- ── BALLS sub-panel ── -->
+        <div class="shop-sub-panel" id="shop-balls-panel">
+          <div class="item-action-row" id="ball-action"></div>
+          <div class="player-carousel" id="ball-list"></div>
+        </div>
+
+        <!-- ── STADIUMS sub-panel ── -->
+        <div class="shop-sub-panel" id="shop-stadiums-panel">
+          <div class="item-action-row" id="stadium-action"></div>
+          <div class="player-carousel" id="stadium-list"></div>
+        </div>
+
+      </div>
+
+      <!-- LEADERBOARD -->
+      <div id="lb-tab" class="tab-panel">
+        <div class="lb-mode-tabs">
+          <button class="lb-mode-btn active" data-lbmode="classic">Classic</button>
+          <button class="lb-mode-btn" data-lbmode="timeattack">Time Attack</button>
+          <button class="lb-mode-btn" data-lbmode="challenge">Challenge</button>
+          <button class="lb-mode-btn" data-lbmode="wc">🌍 WC</button>
+        </div>
+        <div class="lb-list" id="lb-list">
+          <!-- populated by JS -->
+        </div>
+        <div id="wc-lb-tab" style="display:none;flex-direction:column;gap:6px">
+          <!-- populated by JS -->
+        </div>
+      </div>
+
+      <!-- SETTINGS -->
+      <div id="settings-tab" class="tab-panel">
+        <div class="settings-list">
+
+          <!-- ── Sound / Haptics / Particles ── -->
+          <div class="setting-row">
+            <div class="setting-icon">🔊</div>
+            <div class="setting-info">
+              <div class="setting-name" id="setting-sound-name">Sound</div>
+              <div class="setting-sub"  id="setting-sound-sub">Kick & UI sounds</div>
+            </div>
+            <button class="toggle on" id="toggle-sound"></button>
+          </div>
+          <div class="vol-row">
+            <span class="vol-label" id="sfx-vol-label">80%</span>
+            <input type="range" class="vol-slider" id="slider-sfx-vol"
+              min="0" max="100" value="80" step="5">
+          </div>
+          <div class="setting-row">
+            <div class="setting-icon">📳</div>
+            <div class="setting-info">
+              <div class="setting-name" id="setting-haptics-name">Haptics</div>
+              <div class="setting-sub"  id="setting-haptics-sub">Vibration on kick</div>
+            </div>
+            <button class="toggle on" id="toggle-haptics"></button>
+          </div>
+          <div class="setting-row">
+            <div class="setting-icon">✨</div>
+            <div class="setting-info">
+              <div class="setting-name" id="setting-particles-name">Particles</div>
+              <div class="setting-sub"  id="setting-particles-sub">Kick visual effects</div>
+            </div>
+            <button class="toggle on" id="toggle-particles"></button>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-icon">🎬</div>
+            <div class="setting-info">
+              <div class="setting-name" id="setting-slowmo-name">Slow Motion</div>
+              <div class="setting-sub"  id="setting-slowmo-sub">Replay when ball drops</div>
+            </div>
+            <button class="toggle on" id="toggle-slowmo"></button>
+          </div>
+
+          <!-- ── My Country ── -->
+          <div class="setting-row" id="setting-country-row" style="cursor:pointer" onclick="window._changeCountry && window._changeCountry()">
+            <div class="setting-icon">🌍</div>
+            <div class="setting-info">
+              <div class="setting-name" id="setting-country-name">My Country</div>
+              <div class="setting-sub" id="setting-country-val">—</div>
+            </div>
+            <span style="font-size:13px;color:rgba(255,255,255,.3);font-weight:700">CHANGE ›</span>
+          </div>
+
+          <!-- ── Player ID ── -->
+          <div class="setting-row" id="setting-uid-row" style="cursor:pointer" onclick="window._changeUserId && window._changeUserId()">
+            <div class="setting-icon">👤</div>
+            <div class="setting-info">
+              <div class="setting-name">Player ID</div>
+              <div class="setting-sub" id="setting-uid-val">—</div>
+            </div>
+            <span style="font-size:13px;color:rgba(255,255,255,.3);font-weight:700">EDIT ›</span>
+          </div>
+
+          <!-- ── Tutorial ── -->
+          <div class="setting-row" style="cursor:pointer" onclick="window._openTutorial && window._openTutorial()">
+            <div class="setting-icon">📖</div>
+            <div class="setting-info">
+              <div class="setting-name" id="setting-tutorial-name">Tutorial</div>
+              <div class="setting-sub"  id="setting-tutorial-sub">How to play</div>
+            </div>
+            <span style="font-size:13px;color:rgba(255,255,255,.3);font-weight:700">VIEW ›</span>
+          </div>
+
+          <!-- ── Language ── -->
+          <div class="setting-row" id="lang-setting-row" style="cursor:pointer;position:relative">
+            <div class="setting-icon">🗣️</div>
+            <div class="setting-info">
+              <div class="setting-name" id="setting-lang-name">Language</div>
+              <div class="setting-sub"  id="setting-lang-sub">English</div>
+            </div>
+            <span id="lang-toggle-btn" style="font-size:12px;font-weight:900;color:var(--accent);letter-spacing:1px">▼</span>
+          </div>
+          <!-- Language dropdown -->
+          <div id="lang-dropdown" class="lang-dropdown hidden"></div>
+
+          <!-- ── BGM ── -->
+          <div class="settings-divider" id="bgm-section-label">BGM</div>
+
+          <div class="setting-row">
+            <div class="setting-icon">🎵</div>
+            <div class="setting-info">
+              <div class="setting-name" id="setting-music-name">Music</div>
+              <div class="setting-sub" id="bgm-now-playing">—</div>
+            </div>
+            <button class="toggle on" id="toggle-bgm"></button>
+          </div>
+
+          <!-- BGM volume -->
+          <div class="vol-row">
+            <span class="vol-label" id="bgm-vol-label">70%</span>
+            <input type="range" class="vol-slider" id="slider-bgm-vol"
+              min="0" max="100" value="70" step="5">
+          </div>
+
+          <!-- Playlist card -->
+          <div class="bgm-playlist-card">
+            <div class="bgm-playlist-label" id="bgm-playlist-label">PLAYLIST</div>
+            <div id="bgm-playlist"></div>
+          </div>
+
+          <!-- ── Version ── -->
+          <div class="setting-row">
+            <div class="setting-icon">📱</div>
+            <div class="setting-info">
+              <div class="setting-name" id="setting-version-name">Version</div>
+              <div class="setting-sub">Made by Yong</div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+    </div><!-- /lobby-card -->
+  </div><!-- /lobby -->
+
+  <!-- In-game hint (tutorial) -->
+  <div id="game-hint" class="hidden">
+    <span id="hint-emoji">👆</span>
+    <div id="hint-text">Move your foot to control it</div>
+    <button id="hint-ok">Got it</button>
+  </div>
+
+  <!-- Name input modal (new best) -->
+  <!-- name-modal removed: records now auto-save with registered userId -->
+
+  <!-- In-game wind indicator -->
+  <div id="wind-indicator" class="hidden">
+    <span id="wind-arrow">→</span>
+    <div class="wind-bar-track">
+      <div class="wind-bar-fill" id="wind-bar-fill" style="width:0%"></div>
+    </div>
+  </div>
+
+  <!-- In-game announcement -->
+  <div id="game-announcement"></div>
+
+  <!-- Ready / Start countdown overlay -->
+  <div id="countdown-overlay" class="hidden">
+    <div id="countdown-text"></div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════
+       AD OVERLAY  — Mock placeholder (5-second countdown)
+       TODO: Replace showMockAd() in lobby.js with a real rewarded-ad SDK call.
+             Supported SDKs: AdMob, Google IMA, Unity Ads, ironSource, AppLovin …
+             The onComplete callback passed to showMockAd() must fire ONLY after
+             a verified ad completion event from the SDK (not just a timer).
+  ══════════════════════════════════════════════════════════════════════ -->
+  <div id="ad-overlay" class="screen hidden">
+    <div class="ad-mock-card">
+      <div class="ad-mock-header">
+        <span class="ad-tag">AD</span>
+        <span id="ad-countdown" class="ad-countdown-num">5</span>
+      </div>
+      <!-- TODO: Real ad container / SDK mount point goes here -->
+      <div class="ad-mock-body">
+        <div style="font-size:58px">📺</div>
+        <div class="ad-mock-title">Advertisement</div>
+        <div class="ad-mock-sub">
+          Video ad plays here<br>
+          <span style="font-size:10px;opacity:.5">(TODO: real ad SDK)</span>
+        </div>
+      </div>
+      <button id="ad-skip-btn" class="ad-skip-btn" disabled>Please wait…</button>
+    </div>
+  </div>
+
+  <!-- REVIVE PROMPT  — Classic mode, shown when ball hits floor (once per game) -->
+  <div id="revive-prompt" class="screen hidden">
+    <div class="revive-card">
+      <div class="revive-icon">💀</div>
+      <div class="revive-title">Ball dropped!</div>
+      <div class="revive-sub">Watch a short ad to revive<br>and keep your current score</div>
+      <button class="play-btn" id="revive-watch-btn" style="margin-top:6px">📺 Watch Ad &amp; Revive</button>
+      <button class="revive-skip-btn" id="revive-skip-btn">End Game</button>
+      <div class="revive-note">Classic only · once per game</div>
+    </div>
+  </div>
+
+  <!-- COIN MULTIPLIER PROMPT  — shown after every game, before lobby returns -->
+  <div id="coin-ad-prompt" class="screen hidden">
+    <div class="coin-ad-card">
+      <div class="coin-ad-score" id="coin-ad-score">0</div>
+      <div class="coin-ad-earned-line">
+        earned <strong>🪙 <span id="coin-ad-earned">0</span> coins</strong>
+      </div>
+      <div class="coin-ad-sep"></div>
+      <div class="coin-ad-offer-lbl">Watch an ad to triple it</div>
+      <div class="coin-ad-triple">🪙 <span id="coin-ad-triple">0</span></div>
+      <button class="play-btn" id="coin-ad-watch-btn">📺 3× Coins</button>
+      <button class="revive-skip-btn" id="coin-ad-skip-btn">
+        Keep <span id="coin-ad-keep">0</span> coins
+      </button>
+    </div>
+  </div>
+
+  <!-- TUTORIAL MODAL -->
+  <div id="tutorial-modal" class="screen hidden">
+    <div class="tut-modal-card">
+      <div id="tut-slide-area" class="tut-slide-area">
+        <!-- populated by JS -->
+      </div>
+      <div class="tut-footer">
+        <div class="tut-dots-row" id="tut-dots"></div>
+        <div class="tut-btn-row">
+          <button class="tut-skip-btn" id="tut-skip-btn">Skip</button>
+          <button class="tut-next-btn" id="tut-next-btn">Next →</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- USER ID MODAL — first-launch (and Settings edit) -->
+  <div id="user-id-modal" class="screen hidden">
+    <div class="uid-modal-card">
+      <div class="uid-modal-icon">⚽</div>
+      <div class="uid-modal-title" id="uid-modal-title-text">Welcome to Juggle 3D!</div>
+      <div class="uid-modal-sub" id="uid-modal-sub-text">Create your player ID to appear<br>on the WC leaderboard</div>
+      <input id="uid-input" class="uid-input" type="text"
+        placeholder="PLAYER1"
+        maxlength="8"
+        autocomplete="off" spellcheck="false"
+        autocapitalize="characters"
+        inputmode="text" />
+      <div class="uid-hint">Up to 8 letters &amp; numbers (English only)</div>
+      <div class="uid-err" id="uid-err"></div>
+      <button class="play-btn" id="uid-submit-btn" style="width:100%;margin-top:2px">Confirm →</button>
+    </div>
+  </div>
+
+  <!-- COUNTRY PICKER MODAL — outside #lobby to avoid clipping -->
+  <div id="country-picker" class="hidden">
+    <div class="cpicker-sheet" id="cpicker-sheet">
+      <div class="cpicker-handle"></div>
+      <div class="cpicker-header">
+        <div class="cpicker-title">🌍 Select Your Nation</div>
+        <button class="cpicker-close-btn" id="cpicker-close">✕</button>
+      </div>
+      <!-- Warning: shown only when changing country mid-progress -->
+      <div id="cpicker-warning" style="display:none">
+        <span>⚠️</span>
+        <span id="cpicker-warning-text">Changing country will reset your WC progress</span>
+      </div>
+      <div class="cpicker-search-wrap">
+        <input id="country-search" type="text" inputmode="search"
+          placeholder="Search country… / 국가 검색…"
+          autocomplete="off" spellcheck="false" />
+      </div>
+      <div id="country-list" class="cpicker-list"></div>
+    </div>
+  </div>
+
+  <!-- In-game side rank panels (shown during gameplay, hidden in lobby) -->
+  <div id="side-classic" class="side-rank-panel"></div>
+  <div id="side-ta"      class="side-rank-panel"></div>
+  <div id="side-ch"      class="side-rank-panel"></div>
+
+  <script type="module" src="/src/main.js"></script>
+  <script type="module" src="/src/lobby.js"></script>
+</body>
+</html>
