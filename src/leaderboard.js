@@ -75,6 +75,7 @@ export async function submitScore({ mode, score, userId, country = null, char = 
     mode,
     score,
     userId:  userId || 'Player',
+    name:    userId || 'Player',   // legacy compat — refreshLeaderboard reads e.name on old entries
     country: country || 'xx',
     char:    char || 'son',
     ts:      Date.now(),

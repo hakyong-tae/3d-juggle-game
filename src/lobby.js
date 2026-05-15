@@ -2101,7 +2101,7 @@ function refreshLeaderboard() {
     const charInfo = PLAYERS.find(p=>p.id===e.char)
     const flag = charInfo ? charInfo.country.split(' ')[0] : '⚽'
     const charName = charInfo ? charInfo.name : '—'
-    const name = e.name || 'Player'
+    const name = e.userId || e.name || 'Player'
     const delBtn = _isAdmin
       ? `<button class="admin-del-btn lb-del" title="Delete entry" onclick="window._adminDel('${currentLbMode}',${e.score},'${name.replace(/'/g,'\\\'')}')">🗑</button>`
       : ''
