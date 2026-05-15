@@ -26,7 +26,7 @@ async function _loadSDK() {
   if (_sdkLoaded) return _sdk
   _sdkLoaded = true
   try {
-    const m = await import('@verse8/ads')
+    const m = await import(/* @vite-ignore */ '@verse8/ads')
     _sdk = m.Verse8Ads ?? m.default ?? null
   } catch {
     _sdk = null   // 로컬 dev — 패키지 없음
